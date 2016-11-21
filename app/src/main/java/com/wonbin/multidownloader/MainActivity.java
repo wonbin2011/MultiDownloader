@@ -13,6 +13,7 @@ import java.net.URLConnection;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.app.Dialog;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.os.Bundle;
 import android.os.Environment;
@@ -26,6 +27,9 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.ProgressBar;
 import android.widget.TextView;
+
+import com.wonbin.multidownloader.dao.InfoDao;
+import com.wonbin.multidownloader.javabean.Info;
 
 public class MainActivity extends Activity {
 
@@ -69,34 +73,45 @@ public class MainActivity extends Activity {
         int downloadTN = 5;
         String fileName = "wps.apk";
         downloadbutton.setClickable(false);
+        downloadedSize = new InfoDao(this).queryDownload(url.toString());
         downloadProgressBar.setProgress(0);
         new downloadTask(url, Integer
-                .valueOf(downloadTN), dowloadDir + fileName).start();
+                .valueOf(downloadTN), dowloadDir + fileName,this).start();
     }
 
     Handler handler = new Handler() {
         @Override
         public void handleMessage(Message msg) {
-            int progress = (Double.valueOf((downloadedSize * 1.0 / fileSize * 100))).intValue();
-            if (progress == 100) {
-                downloadbutton.setClickable(true);
-                downloadinfo.setText("下载完成！");
-                Dialog mdialog = new AlertDialog.Builder(MainActivity.this)
-                        .setTitle("提示信息")
-                        .setMessage("下载完成，总用时为:"+(SystemClock.currentThreadTimeMillis()-downloadtime)+"毫秒")
-                        .setNegativeButton("确定", new DialogInterface.OnClickListener(){
-                            @Override
-                            public void onClick(DialogInterface dialog, int which) {
-                                dialog.dismiss();
-                            }
-                        })
-                        .create();
-                mdialog.show();
-            } else {
-                downloadinfo.setText("当前进度:" + progress + "%");
+//            switch (msg.what) {
+//                case 0:
+//                    int fileLen = msg.getData().getInt("fileLen");
+//                    int progress = (Double.valueOf((downloadedSize * 1.0 / fileSize * 100))).intValue();
+//                    downloadProgressBar.setProgress(progress);
+//                    break;
+//                case 1:
+                    int progress = (Double.valueOf((downloadedSize * 1.0 / fileSize * 100))).intValue();
+                    if (progress == 100) {
+                        downloadbutton.setClickable(true);
+                        downloadinfo.setText("下载完成！");
+                        Dialog mdialog = new AlertDialog.Builder(MainActivity.this)
+                                .setTitle("提示信息")
+                                .setMessage("下载完成，总用时为:"+(SystemClock.currentThreadTimeMillis()-downloadtime)+"毫秒")
+                                .setNegativeButton("确定", new DialogInterface.OnClickListener(){
+                                    @Override
+                                    public void onClick(DialogInterface dialog, int which) {
+                                        dialog.dismiss();
+                                    }
+                                })
+                                .create();
+                        mdialog.show();
+                    } else {
+                        downloadinfo.setText("当前进度:" + progress + "%");
+                    }
+                    downloadProgressBar.setProgress(progress);
+//                    break;
             }
-            downloadProgressBar.setProgress(progress);
-        }
+
+//        }
 
     };
 
@@ -105,10 +120,13 @@ public class MainActivity extends Activity {
         private int threadNum = 5;
         String urlStr, threadNo, fileName;
 
-        public downloadTask(String urlStr, int threadNum, String fileName) {
+        private Context context;
+
+        public downloadTask(String urlStr, int threadNum, String fileName,Context context) {
             this.urlStr = urlStr;
             this.threadNum = threadNum;
             this.fileName = fileName;
+            this.context = context;
         }
 
         @Override
@@ -120,6 +138,7 @@ public class MainActivity extends Activity {
 //                conn.setRequestProperty("Accept-Encoding","identity");
                 fileSize = conn.getContentLength();
                 Log.d("TAG", "fileSize == " + fileSize);
+                handler.sendEmptyMessage(0);
                 blockSize = fileSize / threadNum;
                 downloadSizeMore = (fileSize % threadNum);
                 Log.d("TAG", "downloadSizeMore  == " + downloadSizeMore);
@@ -131,14 +150,15 @@ public class MainActivity extends Activity {
                         endPos = fileSize;
                     }
                     Log.d("TAG","thread" + i + "   startPos = " + startPos + "    endPos =" + endPos);
-                    FileDownloadThread fdt = new FileDownloadThread(url, file, startPos,endPos);
+                    FileDownloadThread fdt = new FileDownloadThread(url, file, startPos,endPos, context,i);
                     fdt.setName("Thread" + i);
+                    Log.d("TAG","ThreadId = " + fdt.getId());
                     fdt.start();
                     fds[i] = fdt;
                 }
                 boolean finished = false;
                 while (!finished) {
-                    downloadedSize = downloadSizeMore;
+//                    downloadedSize = downloadSizeMore;
                     finished = true;
                     for (int i = 0; i < fds.length; i++) {
                         downloadedSize += fds[i].getDownloadSize();
@@ -165,24 +185,44 @@ class FileDownloadThread extends Thread{
     private int curPosition;
     private boolean finished=false;
     private int downloadSize=0;
-    public FileDownloadThread(URL url,File file,int startPosition,int endPosition){
+    /*-------add-------*/
+    private InfoDao infoDao;
+    private int id;
+
+    public FileDownloadThread(URL url, File file, int startPosition, int endPosition ,Context context,int id){
         this.url=url;
         this.file=file;
         this.startPosition=startPosition;
         this.curPosition=startPosition;
         this.endPosition=endPosition;
+        this.infoDao = new InfoDao(context);
+        this.id = id;
     }
     @Override
     public void run() {
+
+        /*wonbin ---------------- @{*/
+        Info info = infoDao.query(url.toString(),id);
+        if (info != null) {
+            downloadSize += info.getDone();
+        } else {
+            info = new Info(id,0,url.toString());
+            infoDao.insert(info);
+        }
+        downloadSize = info.getDone();
+        startPosition = startPosition + downloadSize;
+        /*@}*/
+
         try {
             //No.1
             //  开始写代码，设置当前线程下载的起止点，并实现用文件流的形式对文件的读写操作，将mp3文件写入到手机的sdcard当中。
             HttpURLConnection conn = (HttpURLConnection) url.openConnection();
             conn.setReadTimeout(5 * 1000);
             conn.setRequestMethod("GET");
+            int fileSize = conn.getContentLength();
             //重要：请求服务器下载部分 指定文件的位置
             conn.setRequestProperty("Range","bytes=" + startPosition + "-" + endPosition);
-            Log.d("TAG","respoonse code = " + conn.getResponseCode());
+            Log.d("TAG","response code = " + conn.getResponseCode());
             BufferedInputStream bufferedInputStream = new
                     BufferedInputStream(conn.getInputStream());
             RandomAccessFile randomAccessFile = new RandomAccessFile(file,"rw");
@@ -193,12 +233,18 @@ class FileDownloadThread extends Thread{
             while ( (hasRead = bufferedInputStream.read(buffer)) != -1 ) {
                 randomAccessFile.write(buffer,0,hasRead);
                 downloadSize += hasRead;
+
+                info.setDone(downloadSize);
+                infoDao.update(info);
+
             }
 
             //end_code
             this.finished = true;
             bufferedInputStream.close();
             randomAccessFile.close();
+            //删除全部
+            infoDao.deleteAll(url.toString(),fileSize);
         } catch (IOException e) {
             e.printStackTrace();
         }
